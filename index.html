@@ -143,10 +143,10 @@ function fc(v){
     return '$'+(v*1e3).toFixed(0)+'K';
   }
   var eok=v/100;
-  if(Math.abs(eok)>=1e4) return (eok/1e4).toFixed(2)+'jo';
-  if(Math.abs(eok)>=10) return Math.round(eok).toLocaleString()+'B won';
-  if(Math.abs(eok)>=1) return eok.toFixed(1)+'B won';
-  return v.toFixed(0)+'M won';
+  if(Math.abs(eok)>=1e4) return (eok/1e4).toFixed(2)+'조원';
+  if(Math.abs(eok)>=10) return Math.round(eok).toLocaleString()+'억원';
+  if(Math.abs(eok)>=1) return eok.toFixed(1)+'억원';
+  return v.toFixed(0)+'백만원';
 }
 function fa(v){
   var a=Math.abs(v);
@@ -162,8 +162,8 @@ function fa(v){
     return (v*1e3).toFixed(0)+'K';
   }
   var eok=v/100;
-  if(Math.abs(eok)>=1e4) return (eok/1e4).toFixed(1)+'jo';
-  if(Math.abs(eok)>=1) return Math.round(eok)+'B';
+  if(Math.abs(eok)>=1e4) return (eok/1e4).toFixed(1)+'조';
+  if(Math.abs(eok)>=1) return Math.round(eok)+'억';
   return v.toFixed(0);
 }
 
