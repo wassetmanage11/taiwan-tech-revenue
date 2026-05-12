@@ -18,6 +18,24 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_HTML = PROJECT_ROOT / "index.html"
 YAHOO_URL = "https://tw.stock.yahoo.com/quote/{ticker}.TW/revenue"
 CUSTOM_CATEGORY = "관심 Company"
+EXCHANGE_COMPANY_APIS = [
+    {
+        "url": "https://openapi.twse.com.tw/v1/opendata/t187ap03_L",
+        "code_key": "公司代號",
+        "english_key": "英文簡稱",
+    },
+    {
+        "url": "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O",
+        "code_key": "SecuritiesCompanyCode",
+        "english_key": "Symbol",
+    },
+    {
+        "url": "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_R",
+        "code_key": "SecuritiesCompanyCode",
+        "english_key": "Symbol",
+    },
+]
+EXCHANGE_COMPANY_CACHE: dict[str, list[dict]] = {}
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -136,6 +154,14 @@ def normalize_company_entry(raw: object) -> dict[str, str]:
     return {"name": name, "ticker": ticker, "category": category}
 
 
+def has_cjk(text: str) -> bool:
+    return bool(re.search(r"[\u3400-\u9fff]", text))
+
+
+def should_infer_company_name(entry: dict[str, str]) -> bool:
+    return entry["name"] == entry["ticker"] or has_cjk(entry["name"])
+
+
 def load_custom_companies(path: Path | None) -> list[dict[str, str]]:
     if path is None or not path.exists():
         return []
@@ -210,6 +236,31 @@ def fetch_ticker_page(ticker: str, timeout: float) -> str:
         return response.read().decode("utf-8", "replace")
 
 
+def clean_english_company_name(value: object) -> str | None:
+    name = re.sub(r"\s+", " ", str(value or "").replace("\u3000", " ")).strip(" -\t\r\n")
+    if not name or name in {"-", "--", "N/A", "None"}:
+        return None
+    return name
+
+
+def fetch_exchange_company_rows(api: dict[str, str], timeout: float) -> list[dict]:
+    if api["url"] not in EXCHANGE_COMPANY_CACHE:
+        request = Request(api["url"], headers={"User-Agent": HEADERS["User-Agent"], "Accept": "application/json"})
+        with urlopen(request, timeout=timeout) as response:
+            EXCHANGE_COMPANY_CACHE[api["url"]] = json.loads(response.read().decode("utf-8-sig", "replace"))
+    return EXCHANGE_COMPANY_CACHE[api["url"]]
+
+
+def fetch_exchange_english_name(ticker: str, timeout: float) -> str | None:
+    normalized = normalize_ticker(ticker)
+    for api in EXCHANGE_COMPANY_APIS:
+        rows = fetch_exchange_company_rows(api, timeout)
+        for row in rows:
+            if str(row.get(api["code_key"], "")).strip() == normalized:
+                return clean_english_company_name(row.get(api["english_key"]))
+    return None
+
+
 def parse_yahoo_symbol_name(page_html: str) -> str | None:
     match = re.search(r'"symbolName"\s*:\s*"([^"]+)"', page_html)
     if match:
@@ -233,7 +284,7 @@ def resolve_custom_company_names(
 ) -> list[dict[str, str]]:
     resolved: list[dict[str, str]] = []
     for entry in custom_companies:
-        if entry["name"] != entry["ticker"]:
+        if not should_infer_company_name(entry):
             resolved.append(entry)
             continue
 
@@ -241,9 +292,7 @@ def resolve_custom_company_names(
         last_error: Exception | None = None
         for attempt in range(retries + 1):
             try:
-                page = fetch_ticker_page(entry["ticker"], timeout)
-                parse_yahoo_monthly_revenue(page)
-                inferred = parse_yahoo_symbol_name(page)
+                inferred = fetch_exchange_english_name(entry["ticker"], timeout)
                 if inferred:
                     current["name"] = inferred
                 break

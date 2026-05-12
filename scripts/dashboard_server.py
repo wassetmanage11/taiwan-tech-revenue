@@ -65,18 +65,15 @@ class DashboardState:
 
     def validate_payload(self, payload: dict, entry: dict[str, str]) -> dict[str, str]:
         if not payload.get("name"):
-            page = self.updater.fetch_ticker_page(entry["ticker"], self.args.timeout)
-            inferred = self.updater.parse_yahoo_symbol_name(page)
+            inferred = self.updater.fetch_exchange_english_name(entry["ticker"], self.args.timeout)
             if inferred:
                 entry["name"] = inferred
-            self.updater.parse_yahoo_monthly_revenue(page)
-        else:
-            self.updater.fetch_company_revenue(
-                entry["name"],
-                entry["ticker"],
-                self.args.timeout,
-                self.args.retries,
-            )
+        self.updater.fetch_company_revenue(
+            entry["name"],
+            entry["ticker"],
+            self.args.timeout,
+            self.args.retries,
+        )
         return entry
 
     def refresh_dashboard(self) -> None:
@@ -110,6 +107,8 @@ class DashboardState:
                 return {"ok": False, "status": 409, "error": "이미 추가된 회사입니다."}
 
             entry = self.validate_payload(payload, entry)
+            if entry["name"] in names:
+                return {"ok": False, "status": 409, "error": "이미 추가된 회사입니다."}
             companies.append(entry)
             self.write_companies(companies)
             self.refresh_dashboard()
