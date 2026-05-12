@@ -128,6 +128,11 @@ function setAddStatus(msg,kind){
   el.className='add-status'+(kind?' '+kind:'');
 }
 
+function isLocalDashboard(){
+  var h=location.hostname;
+  return location.protocol==='file:'||h===''||h==='localhost'||h==='127.0.0.1';
+}
+
 function setCur(c){
   currency=c;
   document.querySelectorAll('[data-cur]').forEach(function(e){e.className='pill cur'+(e.dataset.cur===c?' on':'');});
@@ -136,6 +141,12 @@ function setCur(c){
 function dr(){clearTimeout(debT);debT=setTimeout(render,200);}
 
 function initAddCompany(){
+  if(!isLocalDashboard()){
+    var form=document.getElementById('addCompanyForm');
+    if(form) form.style.display='none';
+    setAddStatus('');
+    return;
+  }
   var sel=document.getElementById('newCategory');
   if(sel){
     var cats=Object.keys(CATS);
