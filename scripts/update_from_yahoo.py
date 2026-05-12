@@ -144,6 +144,10 @@ def load_custom_companies(path: Path | None) -> list[dict[str, str]]:
     if not isinstance(entries, list):
         raise ValueError(f"{path} must contain a companies list")
 
+    return dedupe_custom_companies(normalize_company_entry(item) for item in entries)
+
+
+def dedupe_custom_companies(entries: object) -> list[dict[str, str]]:
     custom: list[dict[str, str]] = []
     seen_names = set(TICKERS)
     seen_tickers = set(TICKERS.values())
@@ -220,6 +224,49 @@ def parse_yahoo_symbol_name(page_html: str) -> str | None:
         if name_match:
             return name_match.group(1).strip()
     return None
+
+
+def resolve_custom_company_names(
+    custom_companies: list[dict[str, str]],
+    timeout: float,
+    retries: int,
+) -> list[dict[str, str]]:
+    resolved: list[dict[str, str]] = []
+    for entry in custom_companies:
+        if entry["name"] != entry["ticker"]:
+            resolved.append(entry)
+            continue
+
+        current = dict(entry)
+        last_error: Exception | None = None
+        for attempt in range(retries + 1):
+            try:
+                page = fetch_ticker_page(entry["ticker"], timeout)
+                parse_yahoo_monthly_revenue(page)
+                inferred = parse_yahoo_symbol_name(page)
+                if inferred:
+                    current["name"] = inferred
+                break
+            except (HTTPError, URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
+                last_error = exc
+                if attempt < retries:
+                    time.sleep(0.5 * (attempt + 1))
+        else:
+            print(f"warning: {entry['ticker']} company name lookup failed: {last_error}", file=sys.stderr)
+        resolved.append(current)
+
+    return dedupe_custom_companies(resolved)
+
+
+def write_custom_companies(path: Path | None, custom_companies: list[dict[str, str]]) -> bool:
+    if path is None or (not custom_companies and not path.exists()):
+        return False
+    payload = {"companies": custom_companies}
+    text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    if path.exists() and path.read_text() == text:
+        return False
+    path.write_text(text)
+    return True
 
 
 def parse_yahoo_monthly_revenue(page_html: str) -> dict[str, float]:
@@ -432,6 +479,8 @@ def main() -> int:
     original_html = args.html.read_text()
     blob, start, end = load_blob(original_html)
     custom_companies = load_custom_companies(args.companies_json)
+    custom_companies = resolve_custom_company_names(custom_companies, args.timeout, args.retries)
+    custom_list_changed = write_custom_companies(args.companies_json, custom_companies)
     tickers = company_tickers(custom_companies)
     fetched, fetch_warnings = fetch_all_revenue(args, tickers)
     blob, latest_period, updated_companies, missing_latest = sync_blob(blob, fetched, custom_companies)
@@ -442,6 +491,7 @@ def main() -> int:
         print(f"Latest period: {latest_period}")
         print(f"Fetched companies: {len(fetched)}/{len(tickers)}")
         print(f"Custom companies: {len(custom_companies)}")
+        print(f"Custom list changed: {custom_list_changed}")
         print(f"Updated BLOB companies: {len(updated_companies)}")
         print(f"Changed file: {changed}")
         if missing_latest:
