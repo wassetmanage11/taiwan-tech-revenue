@@ -295,6 +295,8 @@ def resolve_custom_company_names(
                 inferred = fetch_exchange_english_name(entry["ticker"], timeout)
                 if inferred:
                     current["name"] = inferred
+                elif has_cjk(current["name"]):
+                    current["name"] = current["ticker"]
                 break
             except (HTTPError, URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
                 last_error = exc
@@ -302,6 +304,8 @@ def resolve_custom_company_names(
                     time.sleep(0.5 * (attempt + 1))
         else:
             print(f"warning: {entry['ticker']} company name lookup failed: {last_error}", file=sys.stderr)
+            if has_cjk(current["name"]):
+                current["name"] = current["ticker"]
         resolved.append(current)
 
     return dedupe_custom_companies(resolved)
