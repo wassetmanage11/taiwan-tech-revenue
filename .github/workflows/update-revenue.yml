@@ -1,0 +1,51 @@
+name: Update Taiwan revenue dashboard
+
+"on":
+  schedule:
+    - cron: "30 23 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-taiwan-revenue
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate scripts
+        run: python -m py_compile scripts/update_from_yahoo.py
+
+      - name: Refresh dashboard data
+        run: >
+          python scripts/update_from_yahoo.py
+          --html index.html
+          --companies-json custom_companies.json
+          --workers 3
+          --timeout 30
+          --retries 3
+
+      - name: Commit updated dashboard
+        run: |
+          if git diff --quiet -- index.html custom_companies.json; then
+            echo "No dashboard changes to commit."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html custom_companies.json
+          git commit -m "Update Taiwan revenue dashboard"
+          git push
