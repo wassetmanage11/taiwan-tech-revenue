@@ -537,6 +537,7 @@ def main() -> int:
     tickers = company_tickers(custom_companies)
     fetched, fetch_warnings = fetch_all_revenue(args, tickers)
     blob, latest_period, updated_companies, missing_latest = sync_blob(blob, fetched, custom_companies)
+    blob["tickers"] = tickers
     changed = write_blob(args.html, blob, start, end, original_html, latest_period)
 
     if not args.quiet:
