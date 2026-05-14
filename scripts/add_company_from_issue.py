@@ -30,7 +30,7 @@ def issue_body(path: Path) -> str:
 
 def read_field(body: str, *names: str) -> str:
     for name in names:
-        pattern = rf"(?im)^\s*(?:[-*]\s*)?{re.escape(name)}\s*:\s*(.*?)\s*$"
+        pattern = rf"(?im)^[ \t]*(?:[-*][ \t]*)?{re.escape(name)}[ \t]*:[ \t]*([^\r\n]*)[ \t]*$"
         match = re.search(pattern, body)
         if match:
             return match.group(1).strip().strip("`")
