@@ -126,6 +126,7 @@ var D=BLOB.data, CATS=BLOB.cats, FX=BLOB.fx;
 var API_BASE='http://127.0.0.1:8765';
 var CUSTOM_CATEGORY='관심 Company';
 var WATCH_KEY='taiwanTechRevenue.watchlist.v1';
+var ADD_ISSUE_URL='https://github.com/wassetmanage11/taiwan-tech-revenue/issues/new';
 var BASE_TICKERS={"TSMC":"2330","Hon Hai(Foxconn)":"2317","Inventec":"2356","Nanya":"2408","Innodisk":"5289","ADATA":"3260","Apacer":"8271","Transcend":"2451","UMC":"2303","TUC":"6274","ITEQ":"6213","EMC":"2383","Topoint":"8021","Aspeed":"5274","Accton":"2345","Kinsus":"3189","Unimicron":"3037","Gold Circuit":"2368","Dynamic Electronics":"3715","Nanya PCB":"8046","Asia Vital Components":"3017","Auras Technology":"3324","Kaori Heat":"8996","King Slide Works":"2059","Quanta":"2382","Wiwynn":"6669","Wistron":"3231","Yageo":"2327","Winway":"6515","Fositek":"6805","King Yuan":"2449","Fulltech":"1815","Co-Tech":"8358","Jentech":"3653","Delta Electronics":"2308","Winbond":"2344","Phison":"8299","Landmark Opto":"3081","VPEC":"2455","Browave":"3163","Win Semiconductor":"3105","MPI":"6223","SunoWealth":"2421","Grand Process Tech":"3131"};
 var SERVER_CUSTOM_NAMES=(CATS[CUSTOM_CATEGORY]||[]).slice();
 if(!CATS[CUSTOM_CATEGORY]) CATS[CUSTOM_CATEGORY]=[];
@@ -249,6 +250,27 @@ function addStoredWatch(company){
   setCat(CUSTOM_CATEGORY);
 }
 
+function openAddCompanyIssue(ticker,name,category){
+  var norm=normalizeTickerInput(ticker);
+  if(!/^\d{4,6}$/.test(norm)){
+    setAddStatus('티커는 4~6자리 숫자여야 합니다.','err');
+    return;
+  }
+  var body=[
+    '<!-- taiwan-tech-revenue:add-company -->',
+    'ticker: '+norm,
+    'name: '+String(name||'').trim(),
+    'category: '+(category||CUSTOM_CATEGORY),
+    '',
+    'Submitted from dashboard.'
+  ].join('\n');
+  var url=ADD_ISSUE_URL+
+    '?title='+encodeURIComponent('Add company '+norm)+
+    '&body='+encodeURIComponent(body);
+  window.open(url,'_blank','noopener');
+  setAddStatus('GitHub 이슈 화면에서 Submit new issue를 누르면 자동 추가됩니다.','ok');
+}
+
 function removeWatch(name){
   saveWatchlist(loadWatchlist().filter(function(x){return x.name!==name;}));
   SERVER_CUSTOM_NAMES=SERVER_CUSTOM_NAMES.filter(function(x){return x!==name;});
@@ -304,7 +326,7 @@ function addCompany(ev){
   if(existing){addStoredWatch(existing);return;}
   if(!ticker){setAddStatus('티커 또는 회사명 입력 필요','err');return;}
   if(!isLocalDashboard()){
-    setAddStatus('대시보드 내 회사만 추가할 수 있습니다.','err');
+    openAddCompanyIssue(ticker,name,category);
     return;
   }
   btn.disabled=true;

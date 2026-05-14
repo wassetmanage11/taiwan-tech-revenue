@@ -515,8 +515,17 @@ def sync_blob(
     return blob, latest_period, sorted(set(updated_companies)), missing_latest
 
 
+def js_json_dumps(value: object) -> str:
+    return (
+        json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        .replace("&", "\\u0026")
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+    )
+
+
 def write_blob(html_path: Path, blob: dict, start: int, end: int, original_html: str, latest_period: str) -> bool:
-    next_html = original_html[:start] + json.dumps(blob, ensure_ascii=False, separators=(",", ":")) + original_html[end:]
+    next_html = original_html[:start] + js_json_dumps(blob) + original_html[end:]
     next_html = re.sub(r"\d+ Companies", f"{len(blob['data'])} Companies", next_html, count=1)
     next_html = re.sub(r"Updated ~\d{2}/\d{2}", f"Updated ~{latest_period}", next_html, count=1)
     if next_html == original_html:
@@ -536,6 +545,13 @@ def main() -> int:
     custom_list_changed = write_custom_companies(args.companies_json, custom_companies)
     tickers = company_tickers(custom_companies)
     fetched, fetch_warnings = fetch_all_revenue(args, tickers)
+    missing_new_custom = [
+        f"{entry['name']} ({entry['ticker']})"
+        for entry in custom_companies
+        if entry["name"] not in fetched and entry["name"] not in blob["data"]
+    ]
+    if missing_new_custom:
+        raise RuntimeError(f"new custom company fetch failed: {', '.join(missing_new_custom)}")
     blob, latest_period, updated_companies, missing_latest = sync_blob(blob, fetched, custom_companies)
     blob["tickers"] = tickers
     changed = write_blob(args.html, blob, start, end, original_html, latest_period)

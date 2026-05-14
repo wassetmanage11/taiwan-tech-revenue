@@ -1,0 +1,156 @@
+name: Add company from issue
+
+"on":
+  issues:
+    types: [opened, edited]
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: taiwan-revenue-writes
+  cancel-in-progress: false
+
+jobs:
+  add-company:
+    if: >
+      contains(github.event.issue.body || '', 'taiwan-tech-revenue:add-company') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate scripts
+        run: python -m py_compile scripts/add_company_from_issue.py scripts/update_from_yahoo.py
+
+      - name: Add company to custom list
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/add_company_from_issue.py \
+            --event-json "$GITHUB_EVENT_PATH" \
+            --companies-json custom_companies.json \
+            --timeout 30 \
+            --retries 3 \
+            | tee add-company-result.txt
+
+      - name: Refresh dashboard data
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/update_from_yahoo.py \
+            --html index.html \
+            --companies-json custom_companies.json \
+            --workers 3 \
+            --timeout 30 \
+            --retries 3 \
+            | tee update-result.txt
+
+      - name: Commit updated dashboard
+        id: commit
+        run: |
+          if git diff --quiet -- index.html custom_companies.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html custom_companies.json
+          git commit -m "Add requested Taiwan revenue company"
+          git push
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Comment and close issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const addResult = fs.existsSync('add-company-result.txt')
+              ? fs.readFileSync('add-company-result.txt', 'utf8').trim()
+              : '';
+            const updateResult = fs.existsSync('update-result.txt')
+              ? fs.readFileSync('update-result.txt', 'utf8').trim()
+              : '';
+            const changed = '${{ steps.commit.outputs.changed }}' === 'true';
+            const body = [
+              changed
+                ? 'Dashboard updated and deployed from this request.'
+                : 'No dashboard file changes were needed for this request.',
+              '',
+              addResult && 'Add result:',
+              addResult && '```',
+              addResult,
+              addResult && '```',
+              updateResult && 'Update result:',
+              updateResult && '```',
+              updateResult,
+              updateResult && '```',
+            ].filter(Boolean).join('\n');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              state: 'closed',
+              state_reason: 'completed',
+            });
+
+      - name: Comment on failed request
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = [
+              'Dashboard update failed. I left this issue open so it can be checked.',
+              '',
+              'Most common causes: invalid ticker, Yahoo page not available yet, or temporary fetch failure.',
+              '',
+              `Workflow run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+  unauthorized:
+    if: >
+      contains(github.event.issue.body || '', 'taiwan-tech-revenue:add-company') &&
+      !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Comment and close unauthorized request
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: 'Only repository owners, members, and collaborators can add dashboard companies from issues.',
+            });
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              state: 'closed',
+              state_reason: 'not_planned',
+            });

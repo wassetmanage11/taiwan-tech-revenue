@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: update-taiwan-revenue
+  group: taiwan-revenue-writes
   cancel-in-progress: false
 
 jobs:
