@@ -1,3 +1,9 @@
 {
-  "companies": []
+  "companies": [
+    {
+      "name": "NEXTRON",
+      "ticker": "8147",
+      "category": "관심 Company"
+    }
+  ]
 }
