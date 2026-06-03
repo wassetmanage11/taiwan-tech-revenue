@@ -6,7 +6,9 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import json
+import os
 import re
+import sqlite3
 import sys
 import time
 from pathlib import Path
@@ -17,6 +19,14 @@ from urllib.request import Request, urlopen
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_HTML = PROJECT_ROOT / "index.html"
 YAHOO_URL = "https://tw.stock.yahoo.com/quote/{ticker}.TW/revenue"
+TELEGRAM_SEND_MESSAGE_URL = "https://api.telegram.org/bot{token}/sendMessage"
+DEFAULT_INFO_HUB_ENV_FILE = Path.home() / "Desktop" / "info-hub" / ".env.local"
+DEFAULT_INFO_HUB_DB = Path.home() / "Desktop" / "info-hub" / "data" / "hub.db"
+TELEGRAM_TOKEN_ENVS = ("TAIWAN_REVENUE_TELEGRAM_BOT_TOKEN", "TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID_ENVS = ("TAIWAN_REVENUE_TELEGRAM_CHAT_ID", "TELEGRAM_CHAT_ID")
+INFO_HUB_DB_ENVS = ("TAIWAN_REVENUE_INFO_HUB_DB", "INFO_HUB_DB")
+INFO_HUB_CHAT_ID_ENVS = ("TAIWAN_REVENUE_INFO_HUB_CHAT_ID", "INFO_HUB_TG_DEFAULT_CHAT_ID")
+INFO_HUB_ENV_FILE_ENVS = ("TAIWAN_REVENUE_INFO_HUB_ENV_FILE", "INFO_HUB_ENV_FILE")
 CUSTOM_CATEGORY = "관심 Company"
 EXCHANGE_COMPANY_APIS = [
     {
@@ -106,6 +116,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--workers", type=int, default=4, help="Number of concurrent Yahoo fetches.")
     parser.add_argument("--timeout", type=float, default=20, help="Per-request timeout in seconds.")
     parser.add_argument("--retries", type=int, default=2, help="Retries per ticker after the first attempt.")
+    parser.add_argument(
+        "--telegram-provider",
+        choices=("auto", "info-hub", "bot-api", "off"),
+        default=os.environ.get("TAIWAN_REVENUE_TELEGRAM_PROVIDER", "auto"),
+        help="Notification backend. auto prefers the info-hub Telegram outbox.",
+    )
+    parser.add_argument("--telegram-bot-token", help="Telegram bot token. Defaults to environment variables.")
+    parser.add_argument("--telegram-chat-id", help="Telegram chat ID. Defaults to environment variables.")
+    parser.add_argument("--info-hub-env-file", type=Path, help="Path to info-hub .env.local.")
+    parser.add_argument("--info-hub-db", type=Path, help="Path to info-hub hub.db.")
+    parser.add_argument("--info-hub-chat-id", help="Telegram chat ID for info-hub outbox rows.")
+    parser.add_argument("--telegram-dry-run", action="store_true", help="Print Telegram messages instead of sending.")
     parser.add_argument("--quiet", action="store_true", help="Only print errors and warnings.")
     return parser.parse_args()
 
@@ -361,6 +383,17 @@ def old_company_map(company_data: dict) -> dict[str, float]:
     }
 
 
+def safe_old_company_map(blob: dict, company: str) -> dict[str, float]:
+    company_data = blob.get("data", {}).get(company)
+    if not isinstance(company_data, dict):
+        return {}
+    periods = company_data.get("p")
+    revenue = company_data.get("r")
+    if not isinstance(periods, list) or not isinstance(revenue, list):
+        return {}
+    return {period: value for period, value in zip(periods, revenue) if value is not None}
+
+
 def ordered_periods(revenue_maps: dict[str, dict[str, float]]) -> list[str]:
     periods = {period for rows in revenue_maps.values() for period in rows}
     return sorted(periods, key=period_key)
@@ -419,6 +452,24 @@ def fetch_all_revenue(args: argparse.Namespace, tickers: dict[str, str]) -> tupl
     if len(fetched) < max(1, len(tickers) // 2):
         raise RuntimeError(f"too few Yahoo revenue pages fetched successfully: {len(fetched)}/{len(tickers)}")
     return fetched, warnings
+
+
+def detect_revenue_updates(
+    previous_blob: dict,
+    fetched: dict[str, dict[str, float]],
+    tickers: dict[str, str],
+) -> list[dict[str, str]]:
+    updates: list[dict[str, str]] = []
+    for company, rows in fetched.items():
+        if not rows:
+            continue
+        latest_period = max(rows, key=period_key)
+        latest_revenue = rows[latest_period]
+        previous_revenue = safe_old_company_map(previous_blob, company).get(latest_period)
+        if previous_revenue == latest_revenue:
+            continue
+        updates.append({"company": company, "ticker": tickers.get(company, ""), "period": latest_period})
+    return sorted(updates, key=lambda item: (period_key(item["period"]), item["company"]))
 
 
 def remove_company_from_categories(cats: dict, company: str) -> None:
@@ -534,6 +585,201 @@ def write_blob(html_path: Path, blob: dict, start: int, end: int, original_html:
     return True
 
 
+def env_first(names: tuple[str, ...]) -> str | None:
+    for name in names:
+        value = os.environ.get(name)
+        if value:
+            return value
+    return None
+
+
+def strip_env_value(value: str) -> str:
+    text = value.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
+        return text[1:-1]
+    return text
+
+
+def parse_env_file(path: Path) -> dict[str, str]:
+    if not path.exists():
+        return {}
+
+    values: dict[str, str] = {}
+    for raw_line in path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].strip()
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+            values[key] = strip_env_value(value)
+    return values
+
+
+def info_hub_env_path(args: argparse.Namespace) -> Path:
+    configured = args.info_hub_env_file or env_first(INFO_HUB_ENV_FILE_ENVS)
+    return Path(configured).expanduser() if configured else DEFAULT_INFO_HUB_ENV_FILE
+
+
+def info_hub_config(args: argparse.Namespace) -> tuple[Path, str | None]:
+    env_values = parse_env_file(info_hub_env_path(args))
+    db_path = args.info_hub_db or env_first(INFO_HUB_DB_ENVS) or env_values.get("INFO_HUB_DB")
+    chat_id = args.info_hub_chat_id or env_first(INFO_HUB_CHAT_ID_ENVS) or env_values.get("INFO_HUB_TG_DEFAULT_CHAT_ID")
+    return Path(db_path).expanduser() if db_path else DEFAULT_INFO_HUB_DB, chat_id
+
+
+def format_signed_percent(value: object) -> str:
+    if value is None:
+        return "N/A"
+    return f"{float(value):+.1f}%"
+
+
+def format_revenue_m(value: float) -> str:
+    return f"{value:,.0f}"
+
+
+def format_period_korean(period: str) -> str:
+    year, month = period.split("/")
+    return f"{int(year)}년 {int(month)}월 한달"
+
+
+def period_metric(company_data: dict, metric: str, period: str) -> object:
+    try:
+        index = company_data["p"].index(period)
+    except (KeyError, ValueError):
+        return None
+    values = company_data.get(metric, [])
+    if index >= len(values):
+        return None
+    return values[index]
+
+
+def format_telegram_message(blob: dict, event: dict[str, str]) -> str:
+    company = event["company"]
+    period = event["period"]
+    ticker = event["ticker"]
+    company_data = blob["data"][company]
+    revenue = float(period_metric(company_data, "r", period))
+    yoy = period_metric(company_data, "yoy", period)
+    mom = period_metric(company_data, "mom", period)
+
+    lines = [
+        f"대만 {company}({ticker}) 월간 매출액",
+        "",
+        format_period_korean(period),
+        f"NT ${format_revenue_m(revenue)}M",
+    ]
+
+    twd_usd = blob.get("fx", {}).get("twd_usd", {}).get(period)
+    usd_krw = blob.get("fx", {}).get("usd_krw", {}).get(period)
+    if twd_usd:
+        usd_m = revenue / float(twd_usd)
+        lines.append(f"= USD ${usd_m:,.1f}M")
+        if usd_krw:
+            krw_trillion = usd_m * float(usd_krw) / 1_000_000
+            lines.append(f"= {krw_trillion:,.2f}조원")
+
+    lines.extend(["", f"YoY {format_signed_percent(yoy)} / MoM {format_signed_percent(mom)}"])
+    return "\n".join(lines)
+
+
+def send_telegram_message(token: str, chat_id: str, text: str, timeout: float) -> None:
+    payload = json.dumps({"chat_id": chat_id, "text": text}, ensure_ascii=False).encode("utf-8")
+    request = Request(
+        TELEGRAM_SEND_MESSAGE_URL.format(token=token),
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urlopen(request, timeout=timeout) as response:
+        response.read()
+
+
+def enqueue_info_hub_telegram(db_path: Path, text: str, chat_id: str | None, priority: int = 10) -> int:
+    if not db_path.exists():
+        raise RuntimeError(f"info-hub database not found: {db_path}")
+
+    now = int(time.time() * 1000)
+    media = {"source": "taiwan-tech-revenue"}
+    with sqlite3.connect(db_path, timeout=30, isolation_level=None) as conn:
+        conn.execute("PRAGMA busy_timeout=30000")
+        table_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='telegram_outbox'"
+        ).fetchone()
+        if not table_exists:
+            raise RuntimeError(f"telegram_outbox table not found in {db_path}")
+        cursor = conn.execute(
+            "INSERT INTO telegram_outbox("
+            "kind,chat_id,text,parse_mode,media_json,status,priority,scheduled_at,"
+            "attempt_count,max_attempts,item_id,created_at,updated_at"
+            ") VALUES(?,?,?,?,?,'pending',?,?,?,?,?,?,?)",
+            (
+                "message",
+                str(chat_id) if chat_id else None,
+                text,
+                None,
+                json.dumps(media, ensure_ascii=False),
+                int(priority),
+                now,
+                0,
+                5,
+                None,
+                now,
+                now,
+            ),
+        )
+        return int(cursor.lastrowid)
+
+
+def queue_info_hub_messages(args: argparse.Namespace, messages: list[str]) -> int:
+    db_path, chat_id = info_hub_config(args)
+    queued = 0
+    for message in messages:
+        enqueue_info_hub_telegram(db_path, message, chat_id)
+        queued += 1
+    return queued
+
+
+def notify_telegram(args: argparse.Namespace, blob: dict, events: list[dict[str, str]]) -> tuple[int, str, list[str]]:
+    if not events:
+        return 0, "none", []
+    if args.telegram_provider == "off":
+        return 0, "off", []
+
+    messages = [format_telegram_message(blob, event) for event in events]
+    if args.telegram_dry_run:
+        for message in messages:
+            print("\n--- Telegram message ---")
+            print(message)
+        return len(messages), "dry-run", []
+
+    warnings: list[str] = []
+    if args.telegram_provider in {"auto", "info-hub"}:
+        try:
+            return queue_info_hub_messages(args, messages), "info-hub", []
+        except RuntimeError as exc:
+            if args.telegram_provider == "info-hub":
+                return 0, "info-hub", [f"Telegram notification skipped: {exc}"]
+            warnings.append(f"info-hub Telegram outbox unavailable: {exc}")
+
+    token = args.telegram_bot_token or env_first(TELEGRAM_TOKEN_ENVS)
+    chat_id = args.telegram_chat_id or env_first(TELEGRAM_CHAT_ID_ENVS)
+    if not token or not chat_id:
+        warnings.append("Telegram notification skipped: info-hub outbox unavailable and bot token/chat ID missing.")
+        return 0, "none", warnings
+
+    sent = 0
+    for message in messages:
+        try:
+            send_telegram_message(token, chat_id, message, args.timeout)
+            sent += 1
+        except (HTTPError, URLError, TimeoutError) as exc:
+            warnings.append(f"Telegram notification failed: {exc}")
+    return sent, "bot-api", warnings
+
+
 def main() -> int:
     args = parse_args()
     if args.companies_json is None:
@@ -545,6 +791,7 @@ def main() -> int:
     custom_list_changed = write_custom_companies(args.companies_json, custom_companies)
     tickers = company_tickers(custom_companies)
     fetched, fetch_warnings = fetch_all_revenue(args, tickers)
+    revenue_update_events = detect_revenue_updates(blob, fetched, tickers)
     missing_new_custom = [
         f"{entry['name']} ({entry['ticker']})"
         for entry in custom_companies
@@ -555,6 +802,11 @@ def main() -> int:
     blob, latest_period, updated_companies, missing_latest = sync_blob(blob, fetched, custom_companies)
     blob["tickers"] = tickers
     changed = write_blob(args.html, blob, start, end, original_html, latest_period)
+    telegram_count = 0
+    telegram_provider = "none"
+    telegram_warnings: list[str] = []
+    if changed:
+        telegram_count, telegram_provider, telegram_warnings = notify_telegram(args, blob, revenue_update_events)
 
     if not args.quiet:
         print(f"Updated: {args.html}")
@@ -564,10 +816,14 @@ def main() -> int:
         print(f"Custom list changed: {custom_list_changed}")
         print(f"Updated BLOB companies: {len(updated_companies)}")
         print(f"Changed file: {changed}")
+        print(f"Revenue notifications: {len(revenue_update_events)}")
+        print(f"Telegram notifications handled: {telegram_count} ({telegram_provider})")
         if missing_latest:
             print(f"Companies without {latest_period}: {', '.join(missing_latest)}")
         if fetch_warnings:
             print(f"Warnings: {len(fetch_warnings)}")
+    for warning in telegram_warnings:
+        print(f"warning: {warning}", file=sys.stderr)
     return 0
 
 

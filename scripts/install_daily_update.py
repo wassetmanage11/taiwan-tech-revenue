@@ -25,10 +25,21 @@ LAUNCHD_HTML = APP_SUPPORT / "index.html"
 PROJECT_CUSTOM_COMPANIES = PROJECT_ROOT / "custom_companies.json"
 CUSTOM_COMPANIES_JSON = APP_SUPPORT / "custom_companies.json"
 LOG_DIR = APP_SUPPORT / "logs"
+INFO_HUB_ENV_FILE = Path.home() / "Desktop" / "info-hub" / ".env.local"
+UPDATE_SCHEDULE = [{"Hour": hour, "Minute": 30} for hour in range(7, 19)]
 
 
 def run(command: list[str], check: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(command, check=check, text=True, capture_output=True)
+
+
+def telegram_environment() -> dict[str, str]:
+    if not INFO_HUB_ENV_FILE.exists():
+        return {}
+    return {
+        "TAIWAN_REVENUE_TELEGRAM_PROVIDER": "info-hub",
+        "TAIWAN_REVENUE_INFO_HUB_ENV_FILE": str(INFO_HUB_ENV_FILE),
+    }
 
 
 def main() -> int:
@@ -60,14 +71,23 @@ def main() -> int:
             str(LAUNCHD_HTML),
             "--companies-json",
             str(CUSTOM_COMPANIES_JSON),
+            "--workers",
+            "3",
+            "--timeout",
+            "30",
+            "--retries",
+            "3",
             "--quiet",
         ],
         "WorkingDirectory": str(APP_SUPPORT),
-        "StartCalendarInterval": {"Hour": 8, "Minute": 30},
+        "StartCalendarInterval": UPDATE_SCHEDULE,
         "RunAtLoad": True,
         "StandardOutPath": str(LOG_DIR / "daily-update.log"),
         "StandardErrorPath": str(LOG_DIR / "daily-update.err.log"),
     }
+    telegram_env = telegram_environment()
+    if telegram_env:
+        plist["EnvironmentVariables"] = telegram_env
     PLIST_PATH.write_bytes(plistlib.dumps(plist, sort_keys=False))
 
     server_plist = {
@@ -104,8 +124,9 @@ def main() -> int:
 
     print(f"Installed {LABEL}")
     print(f"Installed {SERVER_LABEL}")
-    print(f"Schedule: every day at 08:30")
+    print("Schedule: every hour from 07:30 to 18:30")
     print("Source: Yahoo Taiwan revenue pages")
+    print(f"Telegram: {'enabled' if telegram_env else 'not configured'}")
     print(f"Plist: {PLIST_PATH}")
     print(f"Server plist: {SERVER_PLIST_PATH}")
     print("Dashboard API: http://127.0.0.1:8765")
