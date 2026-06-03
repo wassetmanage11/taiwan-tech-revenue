@@ -17,9 +17,11 @@ PLIST_PATH = Path.home() / "Library" / "LaunchAgents" / f"{LABEL}.plist"
 SERVER_PLIST_PATH = Path.home() / "Library" / "LaunchAgents" / f"{SERVER_LABEL}.plist"
 PYTHON = "/usr/bin/python3"
 UPDATE_SCRIPT = PROJECT_ROOT / "scripts" / "update_from_yahoo.py"
+SCHEDULED_UPDATE_SCRIPT = PROJECT_ROOT / "scripts" / "run_scheduled_update.py"
 SERVER_SCRIPT = PROJECT_ROOT / "scripts" / "dashboard_server.py"
 APP_SUPPORT = Path.home() / "Library" / "Application Support" / "TaiwanTechRevenue"
 LAUNCHD_UPDATE_SCRIPT = APP_SUPPORT / "update_from_yahoo.py"
+LAUNCHD_SCHEDULED_UPDATE_SCRIPT = APP_SUPPORT / "run_scheduled_update.py"
 LAUNCHD_SERVER_SCRIPT = APP_SUPPORT / "dashboard_server.py"
 LAUNCHD_HTML = APP_SUPPORT / "index.html"
 PROJECT_CUSTOM_COMPANIES = PROJECT_ROOT / "custom_companies.json"
@@ -48,6 +50,8 @@ def main() -> int:
     PLIST_PATH.parent.mkdir(exist_ok=True)
     LAUNCHD_UPDATE_SCRIPT.write_bytes(UPDATE_SCRIPT.read_bytes())
     LAUNCHD_UPDATE_SCRIPT.chmod(0o755)
+    LAUNCHD_SCHEDULED_UPDATE_SCRIPT.write_bytes(SCHEDULED_UPDATE_SCRIPT.read_bytes())
+    LAUNCHD_SCHEDULED_UPDATE_SCRIPT.chmod(0o755)
     LAUNCHD_SERVER_SCRIPT.write_bytes(SERVER_SCRIPT.read_bytes())
     LAUNCHD_SERVER_SCRIPT.chmod(0o755)
     if not PROJECT_CUSTOM_COMPANIES.exists():
@@ -66,6 +70,10 @@ def main() -> int:
         "Label": LABEL,
         "ProgramArguments": [
             PYTHON,
+            str(LAUNCHD_SCHEDULED_UPDATE_SCRIPT),
+            "--repo",
+            str(PROJECT_ROOT),
+            "--update-script",
             str(LAUNCHD_UPDATE_SCRIPT),
             "--html",
             str(LAUNCHD_HTML),
@@ -77,9 +85,9 @@ def main() -> int:
             "30",
             "--retries",
             "3",
-            "--quiet",
+            "--quiet-update",
         ],
-        "WorkingDirectory": str(APP_SUPPORT),
+        "WorkingDirectory": str(PROJECT_ROOT),
         "StartCalendarInterval": UPDATE_SCHEDULE,
         "RunAtLoad": True,
         "StandardOutPath": str(LOG_DIR / "daily-update.log"),

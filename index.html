@@ -50,9 +50,11 @@ header h1 em{color:var(--a1);font-style:normal;}
 
 .card{background:var(--s1);border:1px solid var(--bd);border-radius:12px;padding:14px;overflow:hidden;}
 .card:hover{border-color:var(--a2);}
-.card-hd{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:2px;}
-.card-hd h3{font-size:12px;font-weight:700;}
-.cat-tag{font-size:8px;padding:2px 5px;border-radius:3px;background:var(--s2);color:var(--dim);white-space:nowrap;flex-shrink:0;}
+.card-hd{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:8px;}
+.co-title{min-width:0;}
+.card-hd h3{font-size:13px;font-weight:800;line-height:1.25;}
+.co-meta{margin-top:3px;font-size:10px;font-weight:700;color:var(--a2);}
+.cat-tag{font-size:10px;font-weight:800;padding:3px 7px;border-radius:4px;background:var(--s2);border:1px solid var(--bd);color:var(--tx);white-space:nowrap;flex-shrink:0;}
 .metrics{display:flex;gap:10px;margin-bottom:8px;flex-wrap:wrap;align-items:baseline;}
 .metric .val{font-size:14px;font-weight:800;font-family:monospace;letter-spacing:-.3px;}
 .metric .lbl{font-size:8px;color:var(--dim);}
@@ -183,6 +185,12 @@ function saveWatchlist(list){
 function uniqueNames(names){
   var seen={},out=[];
   names.forEach(function(name){if(name&&D[name]&&!seen[name]){seen[name]=true;out.push(name);}});
+  return out;
+}
+
+function uniqueValues(values){
+  var seen={},out=[];
+  values.forEach(function(v){if(v&&!seen[v]){seen[v]=true;out.push(v);}});
   return out;
 }
 
@@ -417,7 +425,12 @@ function render(){
   if(activeCat!=='All'&&CATS[activeCat]) names=CATS[activeCat].filter(function(n){return D[n];});
   if(q) names=Object.keys(D).filter(function(n){return n.toLowerCase().indexOf(q)!==-1||(CO_CAT[n]||'').toLowerCase().indexOf(q)!==-1;});
 
-  document.getElementById('cnt').textContent=names.length+' companies';
+  var countText=names.length+' companies';
+  if(q&&names.length){
+    var matchedCats=uniqueValues(names.map(function(n){return CO_CAT[n]||'Other';}));
+    countText+=' · '+matchedCats.join(', ');
+  }
+  document.getElementById('cnt').textContent=countText;
   if(!names.length){grid.innerHTML='<div class="no-data">No results</div>';return;}
 
   var html='';
@@ -433,7 +446,7 @@ function render(){
     var lastM=null,lastY=null;
     for(var i=d.mom.length-1;i>=0;i--){if(d.mom[i]!=null){lastM=d.mom[i];break;}}
     for(var i=d.yoy.length-1;i>=0;i--){if(d.yoy[i]!=null&&d.yoy[i]>-99){lastY=d.yoy[i];break;}}
-    html+='<div class="card"><div class="card-hd"><h3>'+esc(name)+'</h3><div class="cat-tag">'+esc(cat)+'</div></div>';
+    html+='<div class="card"><div class="card-hd"><div class="co-title"><h3>'+esc(name)+'</h3><div class="co-meta">Category · '+esc(cat)+'</div></div><div class="cat-tag">'+esc(cat)+'</div></div>';
     html+='<div class="metrics">';
     html+='<div class="metric"><div class="val">'+fc(lastConv)+'</div><div class="lbl">'+lastP+' Revenue</div></div>';
     if(lastM!=null) html+='<div class="metric"><div class="chg '+(lastM>=0?'up':'dn')+'">'+(lastM>=0?'+':'')+lastM.toFixed(1)+'%</div><div class="lbl">MoM</div></div>';
