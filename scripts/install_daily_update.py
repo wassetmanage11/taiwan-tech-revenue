@@ -6,7 +6,6 @@ from __future__ import annotations
 import plistlib
 import subprocess
 import sys
-import os
 from pathlib import Path
 
 
@@ -16,23 +15,20 @@ SERVER_LABEL = "com.baggyeongmin.taiwan-tech-revenue.server"
 PLIST_PATH = Path.home() / "Library" / "LaunchAgents" / f"{LABEL}.plist"
 SERVER_PLIST_PATH = Path.home() / "Library" / "LaunchAgents" / f"{SERVER_LABEL}.plist"
 PYTHON = "/usr/bin/python3"
-UPDATE_SCRIPT = PROJECT_ROOT / "scripts" / "update_from_yahoo.py"
-SCHEDULED_UPDATE_SCRIPT = PROJECT_ROOT / "scripts" / "run_scheduled_update.py"
-SERVER_SCRIPT = PROJECT_ROOT / "scripts" / "dashboard_server.py"
 APP_SUPPORT = Path.home() / "Library" / "Application Support" / "TaiwanTechRevenue"
-LAUNCHD_UPDATE_SCRIPT = APP_SUPPORT / "update_from_yahoo.py"
-LAUNCHD_SCHEDULED_UPDATE_SCRIPT = APP_SUPPORT / "run_scheduled_update.py"
-LAUNCHD_SERVER_SCRIPT = APP_SUPPORT / "dashboard_server.py"
-LAUNCHD_HTML = APP_SUPPORT / "index.html"
-PROJECT_CUSTOM_COMPANIES = PROJECT_ROOT / "custom_companies.json"
-CUSTOM_COMPANIES_JSON = APP_SUPPORT / "custom_companies.json"
+RUNTIME_REPO = APP_SUPPORT / "repo"
+LAUNCHD_UPDATE_SCRIPT = RUNTIME_REPO / "scripts" / "update_from_yahoo.py"
+LAUNCHD_SCHEDULED_UPDATE_SCRIPT = RUNTIME_REPO / "scripts" / "run_scheduled_update.py"
+LAUNCHD_SERVER_SCRIPT = RUNTIME_REPO / "scripts" / "dashboard_server.py"
+LAUNCHD_HTML = RUNTIME_REPO / "index.html"
+CUSTOM_COMPANIES_JSON = RUNTIME_REPO / "custom_companies.json"
 LOG_DIR = APP_SUPPORT / "logs"
 INFO_HUB_ENV_FILE = Path.home() / "Desktop" / "info-hub" / ".env.local"
 UPDATE_SCHEDULE = [{"Hour": hour, "Minute": 30} for hour in range(7, 19)]
 
 
-def run(command: list[str], check: bool = True) -> subprocess.CompletedProcess:
-    return subprocess.run(command, check=check, text=True, capture_output=True)
+def run(command: list[str], check: bool = True, cwd: Path = PROJECT_ROOT) -> subprocess.CompletedProcess:
+    return subprocess.run(command, cwd=cwd, check=check, text=True, capture_output=True)
 
 
 def telegram_environment() -> dict[str, str]:
@@ -44,24 +40,35 @@ def telegram_environment() -> dict[str, str]:
     }
 
 
+def git(command: list[str], cwd: Path = PROJECT_ROOT, check: bool = True) -> subprocess.CompletedProcess:
+    return run(["git", *command], check=check, cwd=cwd)
+
+
+def current_branch() -> str:
+    branch = run(["git", "branch", "--show-current"]).stdout.strip()
+    return branch or "main"
+
+
+def origin_url() -> str:
+    return run(["git", "config", "--get", "remote.origin.url"]).stdout.strip()
+
+
+def sync_runtime_repo(branch: str) -> None:
+    if not (RUNTIME_REPO / ".git").exists():
+        if RUNTIME_REPO.exists() and any(RUNTIME_REPO.iterdir()):
+            raise RuntimeError(f"{RUNTIME_REPO} exists but is not a git checkout")
+        run(["git", "clone", origin_url(), str(RUNTIME_REPO)])
+    git(["fetch", "origin"], cwd=RUNTIME_REPO)
+    git(["checkout", branch], cwd=RUNTIME_REPO)
+    git(["pull", "--ff-only", "origin", branch], cwd=RUNTIME_REPO)
+
+
 def main() -> int:
     APP_SUPPORT.mkdir(parents=True, exist_ok=True)
     LOG_DIR.mkdir(exist_ok=True)
     PLIST_PATH.parent.mkdir(exist_ok=True)
-    LAUNCHD_UPDATE_SCRIPT.write_bytes(UPDATE_SCRIPT.read_bytes())
-    LAUNCHD_UPDATE_SCRIPT.chmod(0o755)
-    LAUNCHD_SCHEDULED_UPDATE_SCRIPT.write_bytes(SCHEDULED_UPDATE_SCRIPT.read_bytes())
-    LAUNCHD_SCHEDULED_UPDATE_SCRIPT.chmod(0o755)
-    LAUNCHD_SERVER_SCRIPT.write_bytes(SERVER_SCRIPT.read_bytes())
-    LAUNCHD_SERVER_SCRIPT.chmod(0o755)
-    if not PROJECT_CUSTOM_COMPANIES.exists():
-        PROJECT_CUSTOM_COMPANIES.write_text('{"companies":[]}\n')
-    if CUSTOM_COMPANIES_JSON.exists():
-        CUSTOM_COMPANIES_JSON.unlink()
-    os.link(PROJECT_CUSTOM_COMPANIES, CUSTOM_COMPANIES_JSON)
-    if LAUNCHD_HTML.exists():
-        LAUNCHD_HTML.unlink()
-    os.link(PROJECT_ROOT / "index.html", LAUNCHD_HTML)
+    branch = current_branch()
+    sync_runtime_repo(branch)
     legacy_workbook = APP_SUPPORT / "source.xlsx"
     if legacy_workbook.exists():
         legacy_workbook.unlink()
@@ -72,7 +79,7 @@ def main() -> int:
             PYTHON,
             str(LAUNCHD_SCHEDULED_UPDATE_SCRIPT),
             "--repo",
-            str(PROJECT_ROOT),
+            str(RUNTIME_REPO),
             "--update-script",
             str(LAUNCHD_UPDATE_SCRIPT),
             "--html",
@@ -87,7 +94,7 @@ def main() -> int:
             "3",
             "--quiet-update",
         ],
-        "WorkingDirectory": str(PROJECT_ROOT),
+        "WorkingDirectory": str(RUNTIME_REPO),
         "StartCalendarInterval": UPDATE_SCHEDULE,
         "RunAtLoad": True,
         "StandardOutPath": str(LOG_DIR / "daily-update.log"),
@@ -135,6 +142,7 @@ def main() -> int:
     print("Schedule: every hour from 07:30 to 18:30")
     print("Source: Yahoo Taiwan revenue pages")
     print(f"Telegram: {'enabled' if telegram_env else 'not configured'}")
+    print(f"Runtime repo: {RUNTIME_REPO}")
     print(f"Plist: {PLIST_PATH}")
     print(f"Server plist: {SERVER_PLIST_PATH}")
     print("Dashboard API: http://127.0.0.1:8765")
