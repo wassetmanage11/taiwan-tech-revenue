@@ -22,8 +22,8 @@ YAHOO_URL = "https://tw.stock.yahoo.com/quote/{ticker}.TW/revenue"
 TELEGRAM_SEND_MESSAGE_URL = "https://api.telegram.org/bot{token}/sendMessage"
 DEFAULT_INFO_HUB_ENV_FILE = Path.home() / "Desktop" / "info-hub" / ".env.local"
 DEFAULT_INFO_HUB_DB = Path.home() / "Desktop" / "info-hub" / "data" / "hub.db"
-TELEGRAM_TOKEN_ENVS = ("TAIWAN_REVENUE_TELEGRAM_BOT_TOKEN", "TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID_ENVS = ("TAIWAN_REVENUE_TELEGRAM_CHAT_ID", "TELEGRAM_CHAT_ID")
+TELEGRAM_TOKEN_ENVS = ("TAIWAN_REVENUE_TELEGRAM_BOT_TOKEN", "TELEGRAM_BOT_TOKEN", "INFO_HUB_TG_TOKEN")
+TELEGRAM_CHAT_ID_ENVS = ("TAIWAN_REVENUE_TELEGRAM_CHAT_ID", "TELEGRAM_CHAT_ID", "INFO_HUB_TG_DEFAULT_CHAT_ID")
 INFO_HUB_DB_ENVS = ("TAIWAN_REVENUE_INFO_HUB_DB", "INFO_HUB_DB")
 INFO_HUB_CHAT_ID_ENVS = ("TAIWAN_REVENUE_INFO_HUB_CHAT_ID", "INFO_HUB_TG_DEFAULT_CHAT_ID")
 INFO_HUB_ENV_FILE_ENVS = ("TAIWAN_REVENUE_INFO_HUB_ENV_FILE", "INFO_HUB_ENV_FILE")
@@ -601,11 +601,15 @@ def strip_env_value(value: str) -> str:
 
 
 def parse_env_file(path: Path) -> dict[str, str]:
-    if not path.exists():
-        return {}
+    try:
+        if not path.exists():
+            return {}
+        lines = path.read_text().splitlines()
+    except OSError as exc:
+        raise RuntimeError(f"cannot read env file {path}: {exc}") from exc
 
     values: dict[str, str] = {}
-    for raw_line in path.read_text().splitlines():
+    for raw_line in lines:
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
@@ -759,7 +763,7 @@ def notify_telegram(args: argparse.Namespace, blob: dict, events: list[dict[str,
     if args.telegram_provider in {"auto", "info-hub"}:
         try:
             return queue_info_hub_messages(args, messages), "info-hub", []
-        except RuntimeError as exc:
+        except (RuntimeError, sqlite3.Error) as exc:
             if args.telegram_provider == "info-hub":
                 return 0, "info-hub", [f"Telegram notification skipped: {exc}"]
             warnings.append(f"info-hub Telegram outbox unavailable: {exc}")

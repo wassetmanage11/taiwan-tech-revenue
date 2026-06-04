@@ -29,6 +29,10 @@ jobs:
         run: python -m py_compile scripts/update_from_yahoo.py
 
       - name: Refresh dashboard data
+        env:
+          TAIWAN_REVENUE_TELEGRAM_PROVIDER: bot-api
+          TAIWAN_REVENUE_TELEGRAM_BOT_TOKEN: ${{ secrets.TAIWAN_REVENUE_TELEGRAM_BOT_TOKEN }}
+          TAIWAN_REVENUE_TELEGRAM_CHAT_ID: ${{ secrets.TAIWAN_REVENUE_TELEGRAM_CHAT_ID }}
         run: >
           python scripts/update_from_yahoo.py
           --html index.html

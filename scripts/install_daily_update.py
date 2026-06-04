@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import plistlib
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -31,8 +32,42 @@ def run(command: list[str], check: bool = True, cwd: Path = PROJECT_ROOT) -> sub
     return subprocess.run(command, cwd=cwd, check=check, text=True, capture_output=True)
 
 
+def strip_env_value(value: str) -> str:
+    text = value.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
+        return text[1:-1]
+    return text
+
+
+def parse_env_file(path: Path) -> dict[str, str]:
+    if not path.exists():
+        return {}
+
+    values: dict[str, str] = {}
+    for raw_line in path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].strip()
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+            values[key] = strip_env_value(value)
+    return values
+
+
 def telegram_environment() -> dict[str, str]:
-    if not INFO_HUB_ENV_FILE.exists():
+    env_values = parse_env_file(INFO_HUB_ENV_FILE)
+    token = env_values.get("TAIWAN_REVENUE_TELEGRAM_BOT_TOKEN") or env_values.get("INFO_HUB_TG_TOKEN")
+    chat_id = env_values.get("TAIWAN_REVENUE_TELEGRAM_CHAT_ID") or env_values.get("INFO_HUB_TG_DEFAULT_CHAT_ID")
+    if token and chat_id:
+        return {
+            "TAIWAN_REVENUE_TELEGRAM_PROVIDER": "bot-api",
+            "TAIWAN_REVENUE_TELEGRAM_BOT_TOKEN": token,
+            "TAIWAN_REVENUE_TELEGRAM_CHAT_ID": chat_id,
+        }
+    if not env_values:
         return {}
     return {
         "TAIWAN_REVENUE_TELEGRAM_PROVIDER": "info-hub",
@@ -104,6 +139,7 @@ def main() -> int:
     if telegram_env:
         plist["EnvironmentVariables"] = telegram_env
     PLIST_PATH.write_bytes(plistlib.dumps(plist, sort_keys=False))
+    PLIST_PATH.chmod(0o600)
 
     server_plist = {
         "Label": SERVER_LABEL,
